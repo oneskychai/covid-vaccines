@@ -4,6 +4,7 @@
 # Vaccine tweets: https://www.kaggle.com/gpreda/all-covid19-vaccines-tweets
 # Vaccine progress: https://www.kaggle.com/gpreda/covid-world-vaccination-progress
 # Country populations: https://www.kaggle.com/tanuprabhu/population-by-country-2020
+# Country continents: https://www.kaggle.com/statchaitya/country-to-continent
 
 # Install necessary libraries
 if (!require(tidyverse))
@@ -26,6 +27,8 @@ if (!require(gganimate))
   install.packages("gganimate", repos="http://cran.r-project.org")
 if (!require(gifski))
   install.packages("gifski", repos="http://cran.r-project.org")
+if (!require(zoo))
+  install.packages("zoo", repos="http://cran.r-project.org")
 
 # Load necessary libraries
 library("tidyverse")
@@ -38,11 +41,14 @@ library("scales")
 library("plotly")
 library("gganimate")
 library("gifski")
+library("zoo")
 
 # Read data in from github
 progress <- read_csv("https://raw.githubusercontent.com/oneskychai/covid-vaccines/trunk/country_vaccinations.csv")
 tweets <- read_csv("https://raw.githubusercontent.com/oneskychai/covid-vaccines/trunk/vaccination_all_tweets.csv")
 populations <- read_csv("https://raw.githubusercontent.com/oneskychai/covid-vaccines/trunk/population_by_country_2020.csv")
+continents <- read_csv("https://raw.githubusercontent.com/oneskychai/covid-vaccines/trunk/countryContinent.csv")
+vacs_by_man <- read_csv("https://raw.githubusercontent.com/oneskychai/covid-vaccines/trunk/country_vaccinations_by_manufacturer.csv")
 
 # Turn off scientific notation and set digits to 3
 options(scipen = 999,
@@ -60,7 +66,8 @@ view(populations)
 # Summarize progress data by country
 country_sums <- progress %>%
   group_by(country) %>%
-  summarize(total_vacs = max(total_vaccinations, na.rm = TRUE),
+  summarize(iso_code = iso_code,
+            total_vacs = max(total_vaccinations, na.rm = TRUE),
             people_vaxed = max(people_vaccinated, na.rm = TRUE),
             people_fully_vaxed = max(people_fully_vaccinated, na.rm = TRUE),
             sum_raw = sum(daily_vaccinations_raw, na.rm = TRUE),
@@ -73,7 +80,7 @@ view(country_sums)
 # Remove sum_raw column from country_sums
 # These columns are very inconsistent with the rest of the data
 progress <- progress[,-7]
-country_sums <- country_sums[,-5]
+country_sums <- country_sums[,-6]
 
 # Make vector of country names
 # Count number of countries
@@ -96,7 +103,7 @@ ind_first <- sapply(countries, function(c) first(which(progress$country == c)))
 
 # Inspect rows in ind_na not in ind_first
 ind <- setdiff(ind_na, ind_first)
-progress[ind,]
+progress[ind,] %>% view()
 
 # Set NA's in daily_vaccinations column of first rows of countries to 0 or
 # total_vaccinations or sum of people_vaccinated and people_fully_vaccinated,
@@ -155,7 +162,197 @@ values <- ifelse(values > country_first, country_first, values)
 # Set first row of daily_vaccinations for each country to values
 progress$daily_vaccinations[ind_first] <- values
 
-# Calculate 17 NA values for daily_vaccinations column for Latvia
+#..............................................#
+# Create rows for 13 missing dates for Belarus #
+#''''''''''''''''''''''''''''''''''''''''''''''#
+
+# Find row for Belarus with NA in daily_vaccinations column
+ind <- which(is.na(progress$daily_vaccinations) & progress$country == "Belarus")
+
+# Copy that row
+row <- progress[ind,]
+
+# Set people_vaccinated to NA
+row$people_vaccinated <- NA
+
+# Calculate number of days between row and previous row
+days <- as.numeric(progress$date[ind] - progress$date[ind - 1])
+
+# Calculate number of total vaccinations for those days
+vacs <- progress$people_vaccinated[ind] - progress$people_vaccinated[ind - 1]
+
+# Set daily_vaccinations in row to rounded average
+row$daily_vaccinations <- round(vacs / days)
+
+# Make data frame with row repeated days - 1 times
+df <- row[rep(1, days - 1),]
+
+# Create sequence of missing dates
+dates <- (progress$date[ind - 1] + 1):(progress$date[ind] - 1)
+
+# Convert dates to Date format
+dates <- as.Date(dates, origin = "1970-01-01")
+
+# Set date column in df to dates vector
+df$date <- dates
+
+# Add df to progress and arrange in proper order
+progress <- progress %>%
+  rbind(df) %>%
+  arrange(country, date)
+
+# Set NA value for daily_vaccinations column for Belarus
+value <- vacs - (days - 1) * row$daily_vaccinations
+progress$daily_vaccinations[ind + days - 1] <- value
+
+#...........................................#
+# Create rows for 6 missing dates for Egypt #
+#'''''''''''''''''''''''''''''''''''''''''''#
+
+# Find row for Egypt with NA in daily_vaccinations column
+ind <- which(is.na(progress$daily_vaccinations) & progress$country == "Egypt")
+
+# Copy that row
+row <- progress[ind,]
+
+# Set people_vaccinated to NA
+row$people_vaccinated <- NA
+
+# Calculate number of days between row and previous row
+days <- as.numeric(progress$date[ind] - progress$date[ind - 1])
+
+# Get value of daily_vaccinations from previous row
+# Daily vaccinations column is very consistent, so we use this number
+value <- progress$daily_vaccinations[ind - 1]
+
+# Set daily_vaccinations in row to value
+row$daily_vaccinations <- value
+
+# Make data frame with row repeated days - 1 times
+df <- row[rep(1, days - 1),]
+
+# Create sequence of missing dates
+dates <- (progress$date[ind - 1] + 1):(progress$date[ind] - 1)
+
+# Convert dates to Date format
+dates <- as.Date(dates, origin = "1970-01-01")
+
+# Set date column in df to dates vector
+df$date <- dates
+
+# Add df to progress and arrange in proper order
+progress <- progress %>%
+  rbind(df) %>%
+  arrange(country, date)
+
+# Set NA value for daily_vaccinations column for Egypt
+progress$daily_vaccinations[ind + days - 1] <- value
+
+#............................................................#
+# Calculate NA values for daily_vaccinations for El Salvador #
+#''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''#
+
+# Find which rows for El Salvador have NA's for daily_vaccinations
+ind <- which(is.na(progress$daily_vaccinations) &
+               progress$country == "El Salvador")
+
+# Set value to 0
+value <- 0
+
+# Iterate over rows in ind and set values for people_fully_vaccinated
+for (i in ind) {
+  
+  # Set people_fully_vaccinated NA's to 0 until non-NA value is reached
+  # Set people_fully_vaccinated NA's to previous non-NA value after
+  if (is.na(progress$people_fully_vaccinated[i])) {
+    progress$people_fully_vaccinated[i] <- value
+  }
+  else {
+    value <- progress$people_fully_vaccinated[i]
+  }
+}
+
+# Iterate over rows in ind and set values for total_vaccinations to sum of
+# people_vaccinated and people_fully_vaccinated
+for (i in ind) {
+  progress$total_vaccinations[i] <- progress$people_vaccinated[i] +
+    progress$people_fully_vaccinated[i]
+}
+
+# Iterate over rows in ind and set values for daily_vaccinations to difference
+# between total_vaccinations for row and previous row
+for (i in ind) {
+  progress$daily_vaccinations[i] <- progress$total_vaccinations[i] -
+    progress$total_vaccinations[i - 1]
+}
+
+#................................................#
+# Set NA values in daily_vaccinations for Guinea #
+#''''''''''''''''''''''''''''''''''''''''''''''''#
+
+# Find which rows for Guinea have NA's for daily_vaccinations
+ind <- which(is.na(progress$daily_vaccinations) & progress$country == "Guinea")
+
+# Get value of daily_vaccinations from previous non-NA row
+value <- progress$daily_vaccinations[ind[1] - 1]
+
+# Set NA's to this value as daily_vaccinations column is very consistent here
+progress$daily_vaccinations[ind] <- value
+
+#.............................................#
+# Create rows for 19 missing dates for Kuwait #
+#'''''''''''''''''''''''''''''''''''''''''''''#
+
+# Find which row for Kuwait has NA for daily_vaccinations
+ind <- which(is.na(progress$daily_vaccinations) & progress$country == "Kuwait")
+
+# Copy that row
+row <- progress[ind,]
+
+# Set people_vaccinated to NA
+row$people_vaccinated <- NA
+
+# Calculate number of days between row and previous row
+days <- as.numeric(progress$date[ind] - progress$date[ind - 1])
+
+# Get last non-NA value of people_fully_vaccinated
+value <- progress %>%
+  filter(country == "Kuwait" & !is.na(people_fully_vaccinated)) %>%
+  .$people_fully_vaccinated %>%
+  last()
+
+# Calculate number of total vaccinations for missing days
+vacs <- progress$people_vaccinated[ind] + value -
+  progress$total_vaccinations[ind - 1]
+
+# Set daily_vaccinations in row to rounded average
+row$daily_vaccinations <- round(vacs / days)
+
+# Make data frame with row repeated days - 1 times
+df <- row[rep(1, days - 1),]
+
+# Create sequence of missing dates
+dates <- (progress$date[ind - 1] + 1):(progress$date[ind] - 1)
+
+# Convert dates to Date format
+dates <- as.Date(dates, origin = "1970-01-01")
+
+# Set date column in df to dates vector
+df$date <- dates
+
+# Add df to progress and arrange in proper order
+progress <- progress %>%
+  rbind(df) %>%
+  arrange(country, date)
+
+# Set NA value for daily_vaccinations column for Kuwait
+value <- vacs - (days - 1) * row$daily_vaccinations
+progress$daily_vaccinations[ind + days - 1] <- value
+
+#.................................................................#
+# Calculate 17 NA values for daily_vaccinations column for Latvia #
+#'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''#
+
 progress <- progress %>%
   
   # If people_fully_vaccinated is NA, create 0 placeholder
@@ -175,11 +372,189 @@ progress <- progress %>%
   # Remove placeholder column
   select(-p_f_v)
 
+#....................................................#
+# Create rows for first 5 missing dates for Pakistan #
+#''''''''''''''''''''''''''''''''''''''''''''''''''''#
+
+# Find first row for Pakistan with NA for daily_vaccinations
+ind <- which(is.na(progress$daily_vaccinations) &
+               progress$country == "Pakistan")[1]
+
+# Copy that row
+row <- progress[ind,]
+
+# Set people_vaccinated to NA
+row$people_vaccinated <- NA
+
+# Calculate number of days between row and previous row
+days <- as.numeric(progress$date[ind] - progress$date[ind - 1])
+
+# Calculate number of total vaccinations for those days
+vacs <- progress$people_vaccinated[ind] - progress$total_vaccinations[ind - 1]
+
+# Set daily_vaccinations in row to rounded average
+row$daily_vaccinations <- round(vacs / days)
+
+# Make data frame with row repeated days - 1 times
+df <- row[rep(1, days - 1),]
+
+# Create sequence of missing dates
+dates <- (progress$date[ind - 1] + 1):(progress$date[ind] - 1)
+
+# Convert dates to Date format
+dates <- as.Date(dates, origin = "1970-01-01")
+
+# Set date column in df to dates vector
+df$date <- dates
+
+# Add df to progress and arrange in proper order
+progress <- progress %>%
+  rbind(df) %>%
+  arrange(country, date)
+
+# Set first NA value for daily_vaccinations column for Pakistan
+value <- vacs - (days - 1) * row$daily_vaccinations
+progress$daily_vaccinations[ind + days - 1] <- value
+
+#...............................................#
+# Create row for next missing date for Pakistan #
+#'''''''''''''''''''''''''''''''''''''''''''''''#
+
+# Find next row for Pakistan with NA for daily_vaccinations
+ind <- which(is.na(progress$daily_vaccinations) &
+               progress$country == "Pakistan")[1]
+
+# Copy that row
+row <- progress[ind,]
+
+# Set people_vaccinated to NA
+row$people_vaccinated <- NA
+
+# Calculate number of days between row and previous row
+days <- as.numeric(progress$date[ind] - progress$date[ind - 1])
+
+# Calculate number of total vaccinations for those days
+vacs <- progress$people_vaccinated[ind] - progress$people_vaccinated[ind - 1]
+
+# Set daily_vaccinations in row to rounded average
+row$daily_vaccinations <- round(vacs / days)
+
+# Create missing date
+dates <- progress$date[ind - 1] + 1
+
+# Set date in row to missing date
+row$date <- dates
+
+# Add row to progress and arrange in proper order
+progress <- progress %>%
+  rbind(row) %>%
+  arrange(country, date)
+
+# Set next NA value for daily_vaccinations column for Pakistan
+value <- vacs - row$daily_vaccinations
+progress$daily_vaccinations[ind + 1] <- value
+
+#...................................................#
+# Create rows for last 4 missing dates for Pakistan #
+#'''''''''''''''''''''''''''''''''''''''''''''''''''#
+
+# Find last row for Pakistan with NA for daily_vaccinations
+ind <- which(is.na(progress$daily_vaccinations) &
+               progress$country == "Pakistan")
+
+# Copy that row
+row <- progress[ind,]
+
+# Set people_vaccinated to NA
+row$people_vaccinated <- NA
+
+# Calculate number of days between row and previous row
+days <- as.numeric(progress$date[ind] - progress$date[ind - 1])
+
+# Calculate number of total vaccinations for those days
+vacs <- progress$people_vaccinated[ind] - progress$people_vaccinated[ind - 1]
+
+# Set daily_vaccinations in row to rounded average
+row$daily_vaccinations <- round(vacs / days)
+
+# Make data frame with row repeated days - 1 times
+df <- row[rep(1, days - 1),]
+
+# Create sequence of missing dates
+dates <- (progress$date[ind - 1] + 1):(progress$date[ind] - 1)
+
+# Convert dates to Date format
+dates <- as.Date(dates, origin = "1970-01-01")
+
+# Set date column in df to dates vector
+df$date <- dates
+
+# Add df to progress and arrange in proper order
+progress <- progress %>%
+  rbind(df) %>%
+  arrange(country, date)
+
+# Set last NA value for daily_vaccinations column for Pakistan
+value <- vacs - (days - 1) * row$daily_vaccinations
+progress$daily_vaccinations[ind + days - 1] <- value
+
 # Make sure there are no NA's left in daily_vaccinations column
 sum(is.na(progress$daily_vaccinations))
 
 # Clean up
-rm(country_first, names, top_5, values)
+rm(df, row, country_first, dates, days, names, top_5, vacs, value, values)
+
+#--------------------------------------#
+# Find any other date gaps in progress #
+#--------------------------------------#
+
+# Create empty vector to store indexes with date gaps
+ind_gaps <- integer(0)
+for (i in 2:nrow(progress)) {
+  if (progress$date[i] - progress$date[i - 1] > 1) {
+    ind_gaps <- append(ind_gaps, i)
+  }
+}
+
+# Inspect rows with date gaps
+ind <- c(ind_gaps, ind_gaps - 1)
+ind <- sort(ind)
+ind <- unique(ind)
+view(progress[ind,])
+# Note the only gaps needing attention are for Guinea 3/19 - 3/23 - 3/31
+# The numbers for the missing dates for El Salvador and Latvia add up correctly
+# The other date gaps are for rows with different countries
+
+# Create vector of missing dates for Guinea
+missing_dates_guinea <-
+  seq(as.Date("2021-03-20"), as.Date("2021-03-30"), "days")
+missing_dates_guinea <- missing_dates_guinea[-4]
+
+#------------------------------------------#
+# Create rows to fill date gaps for Guinea #
+#------------------------------------------#
+
+# Copy first row in Guinea with a date gap
+row <- progress[ind_gaps[3],]
+
+# daily_vaccinations column for Guinea is very consistent around missing dates
+# Leave daily_vaccinations as is
+# Set people_vaccinated to NA
+row$people_vaccinated <- NA
+
+# Make data frame with copies of row for dates in missing_dates_guinea
+df <- row[rep(1, length(missing_dates_guinea)),]
+
+# Set date column in df to missing_dates_guinea
+df$date <- missing_dates_guinea
+
+# Add df to progress and arrange in proper order
+progress <- progress %>%
+  rbind(df) %>%
+  arrange(country, date)
+
+# Clean up
+rm(df, row, ind_gaps, missing_dates_guinea)
 
 #-----------------------------------------------#
 # Replace all NA's in total_vaccinations column #
@@ -188,14 +563,18 @@ rm(country_first, names, top_5, values)
 # Count number of countries with all NA's in total_vaccinations column
 sum(country_sums$total_vacs == -Inf)
 
+# Recalculate ind_first now that rows have been added
+ind_first <- sapply(countries, function(c) first(which(progress$country == c)))
+
 # Count number of countries with NA in first row of total_vaccinations column
 sum(is.na(progress$total_vaccinations[ind_first]))
 
-# Find which country has NA in first row of total_vaccinations column
+# Find which countries have NA in first row of total_vaccinations column
 ind <- ind_first[which(is.na(progress$total_vaccinations[ind_first]))]
 ind
 
-# Set first row of total_vaccinations for Latvia to people_vaccinated value
+# Set first rows of total_vaccinations for Latvia and Guinea to
+# people_vaccinated value
 progress$total_vaccinations[ind] <- progress$people_vaccinated[ind]
 
 # Set NA's in total_vaccinations column to sum of daily_vaccinations and
@@ -208,9 +587,6 @@ while (sum(is.na(progress$total_vaccinations)) != 0) {
                                          lag(total_vaccinations),
                                        total_vaccinations))
 }
-
-# Make sure there are no NA's left in total_vaccinations column
-sum(is.na(progress$total_vaccinations))
 
 #----------------------------------------------------------------------------#
 # Replace some NA's in people_vaccinated and people_fully_vaccinated columns #
@@ -227,8 +603,45 @@ progress <- progress %>%
                                           0,
                                           people_fully_vaccinated))
 
+# Examine countries using Johnson and Johnson vaccine
+johnson_countries <- progress %>%
+  select(country, vaccines) %>%
+  unique() %>%
+  filter(str_detect(vaccines, "Johnson"))
+johnson_countries
+
+# View data for johnson_countries
+johnson_data <- progress[progress$country %in% johnson_countries$country,]
+view(johnson_data)
+
+# Calculate difference between total_vaccinations and sum of people_vaccinated
+# and people_fully_vaccinated for last row of countries in johnson_data
+# This should be the number of J&J vaccines used
+johnson_data %>%
+  group_by(country) %>%
+  filter(date == last(date)) %>%
+  summarize(diff = total_vaccinations -
+              (people_vaccinated + people_fully_vaccinated))
+
+# Find how many Johnson and Johnson vaccines used in johnson_countries
+vacs_by_man %>%
+  filter(location %in% johnson_countries$country) %>%
+  filter(str_detect(vaccine, "Johnson")) %>%
+  group_by(location) %>%
+  summarize(j_vacs = last(total_vaccinations))
+
+# Remove Poland from johnson_countries, it appears they have not used any J&J
+# vaccines
+johnson_countries <- johnson_countries %>%
+  filter(country != "Poland")
+
+# Extract country column from johnson_countries
+johnson_countries <- johnson_countries$country
+
 # If people_vaccinated is NA and people_fully_vaccinated is not NA,
 # set people_vaccinated to total_vaccinations - people_fully_vaccinated
+# Okay to include johnson_countries, affected rows are all before any J&J
+# vaccines administered, no rows affected for South Africa
 progress <- progress %>%
   mutate(people_vaccinated = ifelse(is.na(people_vaccinated) &
                                       !is.na(people_fully_vaccinated),
@@ -238,10 +651,13 @@ progress <- progress %>%
 
 # If people_vaccinated is not NA and people_fully_vaccinated is NA,
 # set people_fully_vaccinated to total_vaccinations - people_vaccinated
+# Okay to include johnson_countries, affected rows are all before any J&J
+# vaccines administered, no rows affected for South Africa
 # After this all NA's in columns 4 through 7 will be in pairs in columns 5 and 6
 progress <- progress %>%
   mutate(people_fully_vaccinated = ifelse(!is.na(people_vaccinated) &
-                                            is.na(people_fully_vaccinated),
+                                            is.na(people_fully_vaccinated) &
+                                            !country %in% johnson_countries,
                                           total_vaccinations -
                                             people_vaccinated,
                                           people_fully_vaccinated))
@@ -295,8 +711,12 @@ for (i in ind_not_first) {
 
 # Make sure people_vaccinated = total_vaccinations - people_fully_vaccinated
 # This will add any excess discrepancies to the people_vaccinated column
+# Exclude johnson_countries
 progress <- progress %>%
-  mutate(people_vaccinated = total_vaccinations - people_fully_vaccinated)
+  mutate(people_vaccinated = ifelse(!country %in% johnson_countries,
+                                    total_vaccinations -
+                                      people_fully_vaccinated,
+                                    people_vaccinated))
 
 #----------------------------------------------#
 # Replace all NA's in people_vaccinated column #
@@ -327,7 +747,7 @@ for (i in ind_na) {
 }
 
 # Clean up
-rm(countries_na_first, ind_na, ind_na_first)
+rm(countries_na_first, ind_na_first)
 
 #-----------------------------------------------------------#
 # Adjust rows where people_vaccinated is more than next row #
@@ -342,11 +762,23 @@ find_problems(5) %>% length()
 # people_fully_vaccinated column
 # Work backwards from the end of the data set to ensure no decreasing values
 # remain for any country
+# Exclude South Africa, we will deal with NA's there separately
 for (i in rev(ind_not_first)) {
-  if (progress$people_vaccinated[i - 1] > progress$people_vaccinated[i]) {
+  if (progress$people_vaccinated[i - 1] > progress$people_vaccinated[i] &
+      progress$country[i] != "South Africa") {
     progress$people_vaccinated[i - 1] <- progress$people_vaccinated[i]
   }
 }
+
+# Set people_vaccinated and people_fully_vaccinated to total_vaccinations for
+# South Africa
+progress <- progress %>%
+  mutate(people_vaccinated = ifelse(country == "South Africa",
+                                    total_vaccinations,
+                                    people_vaccinated),
+         people_fully_vaccinated = ifelse(country == "South Africa",
+                                          total_vaccinations,
+                                          people_fully_vaccinated))
 
 # Verify no more problems in people_vaccinated column
 find_problems(5)
@@ -356,8 +788,46 @@ find_problems(5)
 #----------------------------------------------------#
 
 # Set people_fully_vaccinated to total_vaccinations - people_vaccinated
+# Exclude johnson_countries
 progress <- progress %>%
-  mutate(people_fully_vaccinated = total_vaccinations - people_vaccinated)
+  mutate(people_fully_vaccinated = ifelse(!country %in% johnson_countries,
+                                          total_vaccinations -
+                                            people_vaccinated,
+                                          people_fully_vaccinated))
+
+# Check to see when J&J vaccine is used in Czechia
+vacs_by_man %>%
+  filter(location == "Czechia" & str_detect(vaccine, "Johnson"))
+
+# Make sure people_fully_vaccinated is not NA for Czechia on 2021-04-22
+progress %>%
+  filter(country == "Czechia" & date == "2021-04-22") %>%
+  .$people_fully_vaccinated
+
+# Set NA's in people_fully_vaccinated column for Czechia to difference between
+# total_vaccinations and people_vaccinated
+ind_na <- which(progress$country == "Czechia" &
+                  is.na(progress$people_fully_vaccinated))
+progress$people_fully_vaccinated[ind_na] <-
+  progress$total_vaccinations[ind_na] - progress$people_vaccinated[ind_na]
+
+# Check to see when J&J vaccine is used in United States
+vacs_by_man %>%
+  filter(location == "United States" & str_detect(vaccine, "Johnson"))
+
+# Make sure people_fully_vaccinated is not NA for United States after 2021-03-07
+progress %>%
+  filter(country == "United States" & date > "2021-03-07") %>%
+  .$people_fully_vaccinated %>%
+  is.na() %>%
+  sum()
+
+# Set NA's in people_fully_vaccinated column for United States to difference
+# between total_vaccinations and people_vaccinated
+ind_na <- which(progress$country == "United States" &
+                  is.na(progress$people_fully_vaccinated))
+progress$people_fully_vaccinated[ind_na] <-
+  progress$total_vaccinations[ind_na] - progress$people_vaccinated[ind_na]
 
 # Make sure there are no more NA's in columns 4 through 7
 sum(is.na(progress[,4:7]))
@@ -392,6 +862,8 @@ problems <- problems %>%
 # column 5
 # This will shuffle counts from column 5 over to column 6 ensuring column 6 does
 # not have any negative or decreasing values in these rows
+# Note none of these rows involve J&J vaccine, so no special consideration is
+# necessary
 
 # Find previous non-negative value in column 6
 value <- progress[[ind[1] - 1, 6]]
@@ -436,7 +908,11 @@ find_problems(4:6) %>% sapply(length)
 sum(progress < 0, na.rm = TRUE)
 
 # Make sure all total_vaccinations = people_vaccinated + people_fully_vaccinated
-mean(progress[,4] == progress[,5] + progress[,6])
+# Exclude johnson_countries
+progress %>%
+  filter(!country %in% johnson_countries) %>%
+  summarize(mean(total_vaccinations == people_vaccinated +
+                   people_fully_vaccinated))
 
 # Make sure all total_vaccinations = previous value + daily_vaccinations for
 # each country
@@ -461,7 +937,70 @@ view(country_sums)
 sum(country_sums$total_vacs < country_sums$sum)
 
 # Clean up
-rm(excess, problems, i, ind_first, ind_not_first, value, find_problems)
+rm(excess, johnson_data, problems, i, ind_first, ind_na, ind_not_first,
+   johnson_countries, value, find_problems)
+
+#---------------------------------------------#
+# Create rows for all dates for all countries #
+#---------------------------------------------#
+
+# Create column with first date with data for each country
+progress <- progress %>%
+  group_by(country) %>%
+  mutate(first_date = first(date))
+
+# Find date range of progress
+date_range <- range(progress$date)
+
+# Create vector of all dates in date_range
+dates <- as.Date(date_range[1]:date_range[2], origin = "1970-01-01")
+
+# Create data frame with all dates for all countries
+df <- expand.grid(countries, dates) %>%
+  `names<-`(c("country", "date")) %>%
+  arrange(country, date)
+
+# Create data frame with all static columns of progress
+static <- progress %>%
+  select(1:2, 12:15) %>%
+  unique()
+
+# Join progress with df
+progress <- df %>%
+  left_join(static, by = "country") %>%
+  left_join(progress[c(1, 3:11)], by = c("country", "date")) %>%
+  select(1, 3, 2, 7, 8:15, 4:6)
+
+# Set all NA's in daily_vaccinations column to 0
+progress <- progress %>%
+  mutate(daily_vaccinations = replace_na(daily_vaccinations, 0))
+
+# Set all NA's in columns 5 through 7 to 0 if before first_date
+progress <- progress %>%
+  mutate(total_vaccinations = ifelse(date < first_date,
+                                     0,
+                                     total_vaccinations),
+         people_vaccinated = ifelse(date < first_date,
+                                    0,
+                                    people_vaccinated),
+         people_fully_vaccinated = ifelse(date < first_date,
+                                          0,
+                                          people_fully_vaccinated))
+
+# Set all remaining NA's in columns 5 through 7 to previous non-NA value
+ind <- which(is.na(progress$total_vaccinations))
+for (i in ind) {
+  progress[ind, 5] <- progress[ind - 1, 5]
+  progress[ind, 6] <- progress[ind - 1, 6]
+  progress[ind, 7] <- progress[ind - 1, 7]
+}
+
+# Remove first_date column
+progress <- progress %>%
+  select(-first_date)
+
+# Clean up
+rm(df, static, date_range, dates)
 
 #-------------------#
 # Clean populations #
@@ -493,13 +1032,13 @@ countries_pop <- populations$country
 sum(countries %in% countries_pop)
 
 # Check which countries have different names or are not listed in populations
-ind <- which(!(countries %in% countries_pop))
+ind <- which(!countries %in% countries_pop)
 countries[ind]
 
 # Change country names in populations to match names in progress
-ind_pop <- c(34, 50, 55, 176, 182, 218)
+ind_pop <- c(34, 50, 53, 55, 176, 182, 210, 218)
 populations$country[ind_pop] <-
-  countries[ind[c(1:3, 10, 12, 14)]]
+  countries[ind[c(1:4, 12, 14, 16, 17)]]
 
 # Display which countries are not listed in populations
 countries_pop <- populations$country
@@ -508,11 +1047,11 @@ countries[ind]
 
 # Make vectors with population info for missing countries
 # This data was gathered by web search, mostly wikipedia
-pops <- c(56290000, 63155, 107800, 372486, 1890000,
+pops <- c(56290000, 63155, 107800, 1873160, 372486, 1890000,
           5101414, 11940, 5460000, 3150000)
-pop_dens <- c(432, 965, 912, 106, 133, 847, 284, 65, 152)
-med_age <- c(40, 44.3, 37.5, 37.9, 38.9, 20.8, 35.3, 42, 42.5)
-urban_pop <- c(79.3, 31, 31, 66.8, 65, 76.7, 52.9, 83, 64.9)
+pop_dens <- c(432, 965, 912, 159, 106, 133, 847, 284, 65, 152)
+med_age <- c(40, 44.3, 37.5, 29.1, 37.9, 38.9, 20.8, 35.3, 42, 42.5)
+urban_pop <- c(79.3, 31, 31, 54.7, 66.8, 65, 76.7, 52.9, 83, 64.9)
 
 # Make data frame with vectors for missing countries
 df <- data.frame(country = countries[ind],
@@ -537,7 +1076,7 @@ progress <- progress %>%
   left_join(populations, by = "country")
 
 # Clean up
-rm(df, countries, countries_pop, ind_pop, med_age, names, pop_dens, pops,
+rm(df, countries_pop, ind_pop, med_age, names, pop_dens, pops,
    urban_pop)
 
 #----------------------------------------#
@@ -608,7 +1147,8 @@ progress <- progress %>%
 # Update country_sums with new data
 country_sums <- progress %>%
   group_by(country) %>%
-  summarize(total_vacs = last(total_vaccinations),
+  summarize(iso_code = first(iso_code),
+            total_vacs = last(total_vaccinations),
             people_vaxed = last(people_vaccinated),
             people_fully_vaxed = last(people_fully_vaccinated),
             total_vacs_per_hundred = last(total_vaccinations_per_hundred),
@@ -620,6 +1160,66 @@ country_sums <- progress %>%
 
 # Clean up
 rm(country_vacs)
+
+#--------------------------------------------------#
+# Add continent and sub_region columns to progress #
+#--------------------------------------------------#
+
+# Select desired columns from continents
+continents <- continents %>%
+  select(country, continent, sub_region)
+
+# Check to see if all countries in progress
+# are listed with same name in continents
+countries_cont <- continents$country
+sum(countries %in% countries_cont)
+
+# Check which countries have different names or are not listed in populations
+ind <- which(!countries %in% countries_cont)
+countries[ind]
+
+# Change country names in continents to match names in progress
+ind_cont <- c(27, 34, 41, 55, 58, 60, 214, 73, 72, 105, 122, 146, 132, 170, 183,
+              186, 119, 217, 218, 222, 235, 236, 241, 242)
+continents$country[ind_cont] <-
+  countries[ind[c(1:6, 8:11, 13:15, 18:20, 22:29)]]
+
+# Display which countries are not listed in continents
+countries_cont <- continents$country
+ind <- which(!(countries %in% countries_cont))
+countries[ind]
+
+# Make vectors with continent info for missing countries
+cont <- c(rep("Europe", 6))
+sub_region <- c("Nothern Europe", rep("Southern Europe", 2),
+                rep("Northern Europe", 3))
+
+# Make data frame with vectors for missing countries
+df <- data.frame(country = countries[ind],
+                 continent = cont,
+                 sub_region = sub_region)
+
+# Add df rows to continents
+continents <- rbind(continents, df)
+
+# Reorder continents by country
+continents <- continents %>%
+  arrange(country)
+
+# Join progress with continents
+# Reorder columns so continent and sub_region are next to country
+progress <- progress %>%
+  left_join(continents, by = "country") %>%
+  select(1, 29, 30, 2:28)
+
+# Join country_sums with continents
+# Reorder columns so continent and sub_region are next to country
+country_sums <- country_sums %>%
+  left_join(continents, by = "country") %>%
+  select(1:2, 23, 24, 3:22)
+
+# Clean up
+rm(df, cont, countries_cont, ind_cont, sub_region)
 
 #--------------------------#
 # Save cleaned rda objects #
@@ -674,12 +1274,14 @@ view_location <- function(x) {
 view_location("Jersey")
 
 # Remove "Jersey" from countries
+# Almost all occurrences of Jersey are New Jersey
 countries <- countries[-which(countries == "Jersey")]
 
 # Inspect occurrences of "Georgia" in user_locations
 view_location("Georgia")
 
 # Remove "Georgia" from countries
+# Almost all occurrences of Georgia are from the US
 countries <- countries[-which(countries == "Georgia")]
 
 # Create function to count occurrences of location in user_locations
@@ -771,8 +1373,8 @@ ind <- which(str_detect(tweets$user_location, "New South Wales"))
 view_location("New South Wales")
 country[ind]
 
-# Remove "Wales" or ",Wales" from above elements
-country[ind] <- str_remove(country[ind], "\\,*Wales")
+# Set above elements to "Australia"
+country[ind] <- "Australia"
 
 # Add country column to tweets
 tweets <- tweets %>%
@@ -816,23 +1418,18 @@ cities <- c("Los Angeles", "San Francisco", "Seattle", "Houston", "Dallas",
             "Chicago", "Phoenix", "Philadelphia", "San Antonio", "San Diego",
             "San Jose", "Denver", "Boston", "Las Vegas", "Detroit", "Portland",
             "Cleveland", "Atlanta", "Austin", "DC", "Charleston", "New Orleans",
-            "NY", "Jacksonville")
+            "NY", "Jacksonville", "Miami", "Brooklyn")
 
 # Create vector of state abbreviations that won't create too many mistakes
 abbs <- paste0(" ", state.abb, "$")
 
-# Set indicators for USA, leave out state abbreviations
+# Set indicators for USA
 indicators <- c(cities, state.name, abbs, "US", "in America", "of America",
-                "^America$", "^CA$")
+                "^America$", "^CA$", "SoCal")
 
 # Create logical vector for USA indicator found in tweets$user_location
 # Note this will take a minute
 usa <- unname(sapply(tweets$user_location, detect_country))
-
-# Count how many rows have usa = TRUE where country is not ""
-tweets %>%
-  filter(country != "" & usa == TRUE) %>%
-  summarize(n())
 
 # Set or add "United States" to rows where usa = TRUE depending on current value
 tweets <- tweets %>%
@@ -849,11 +1446,6 @@ rm(abbs, cities, usa)
 # Find indicators of England in user_location #
 #---------------------------------------------#
 
-# Count number of occurrences of "London" in user_location without "England" in
-# country
-sum(str_detect(tweets$user_location, "London") &
-      !str_detect(tweets$country, "England"), na.rm = TRUE)
-
 # View user_locations that contain biggest cities in England
 view_location("London")
 view_location("Liverpool")
@@ -869,7 +1461,7 @@ view_location("Oxford")
 indicators <- c("(?<!New )London", "Liverpool", "Sheffield", "Leeds",
              "Manchester(?!, N|, M)", "Bristol(?!,C)", "Coventry(?! R)",
              "Leicester", "Oxford(?!, O)", "Nottingham", "Essex", "Yorkshire",
-             "Chesterfield", "Watford", "Poole")
+             "Chesterfield", "Watford", "Poole", "london")
 
 # Create logical vector for England indicator found in tweets$user_location
 eng <- unname(sapply(tweets$user_location, detect_country))
@@ -1041,7 +1633,9 @@ view_location("Surat")
 indicators <- c("Delhi", "Mumbai", "Chennai", "Bangalore", "Hyderabad",
                 "Kolkata", "Jaipur", "Ahmedabad", "Patna", "Surat", "INDIA",
                 "india", "patna", "Jammu", "Kashmir", "Bengaluru", "Bharat",
-                "Rajasthan", "Bhubaneswar", "Pune", "Bombay", "Kerala", "delhi")
+                "Rajasthan", "Bhubaneswar", "Pune", "Bombay", "Kerala", "delhi",
+                "Nagar", "Kharar", "Mohali", "Noida", "Chandigarh", "Gurgaon",
+                "BENGALURU", "Gujarat", "mumbai", "Assam")
 
 # Create logical vector for India indicator found in tweets$user_location
 india <- unname(sapply(tweets$user_location, detect_country))
@@ -1163,7 +1757,7 @@ view_location("NL")
 view_location("NB")
 
 # Create vector of province abbreviations that won't create too many mistakes
-abbs <- c("BC$", "AB$", "ON$", "QC$", "YT$", "NB$", "MB$")
+abbs <- c("BC$", "AB$", "(?<!D|I|O|T)ON$", "QC$", "YT$", "NB$", "MB$")
 
 # Set indicators for Canada
 indicators <- c(cities, provinces, abbs, "CANADA")
@@ -1194,7 +1788,7 @@ view_location("Li(è|e)ge")
 view_location("Bruges")
 
 # Set indicators for Belgium
-indicators <- c("Brussels", "Antwerp", "Li(è|e)ge", "Bruges", "Knokke",
+indicators <- c("Brussels", "Antwerp", "Ghent", "Li(è|e)ge", "Bruges", "Knokke",
                 "Belgi")
 
 # Create logical vector for Belgium indicator found in tweets$user_location
@@ -1381,7 +1975,7 @@ view_location("Mombasa")
 view_location("Nakuru")
 
 # Set indicators for Kenya
-indicators <- c("Nairobi", "Mombasa")
+indicators <- c("Nairobi", "Mombasa", "Nakuru")
 
 # Create logical vector for Kenya indicator found in tweets$user_location
 kenya <- unname(sapply(tweets$user_location, detect_country))
@@ -1406,7 +2000,7 @@ view_location("Prague")
 view_location("Brno")
 
 # Set indicators for Czechia
-indicators <- c("Prague", "Czech")
+indicators <- c("Prague", "Brno", "Czech")
 
 # Create logical vector for Czechia indicator found in tweets$user_location
 czech <- unname(sapply(tweets$user_location, detect_country))
@@ -1487,7 +2081,7 @@ view_location("Marseille")
 view_location("Nice")
 
 # Set indicators for France
-indicators <- c("Paris", "Nice")
+indicators <- c("Paris", "Lyon", "Marseille", "Nice")
 
 # Create logical vector for France indicator found in tweets$user_location
 franc <- unname(sapply(tweets$user_location, detect_country))
@@ -1569,7 +2163,7 @@ view_location("Debrecen")
 view_location("Miskolc")
 
 # Set indicators for Hungary
-indicators <- c("Budapest", "Magyarorsz", "Miskolc")
+indicators <- c("Budapest", "Debrecen", "Magyarorsz", "Miskolc")
 
 # Create logical vector for Hungary indicator found in tweets$user_location
 hung <- unname(sapply(tweets$user_location, detect_country))
@@ -1650,14 +2244,14 @@ clean_tweet <- function(text) {
     # Remove @people
     str_remove_all("@\\w+") %>%
     
-    # Separate words strung together in hashtags
-    word_sep() %>%
-    
     # Remove punctuation
     gsub("[[:punct:]]", "", .) %>%
     
     # Remove web links
     str_remove_all("http\\w+") %>%
+    
+    # Separate words strung together in hashtags
+    word_sep() %>%
     
     # Replace emojis with unique identifier
     replace_emoji_identifier() %>%
@@ -1689,6 +2283,7 @@ rm(hash_sentiment_emojis)
 sentiment_values <- rbind(afinn, emoji)
 
 # Convert tweets to separate rows of individual words
+# Note this will take a minute
 tweets_words <- tweets %>%
   
   # Clean tweets 
@@ -1717,10 +2312,6 @@ tweets <- tweets %>%
   left_join(tweets_values, by = "id") %>%
   mutate(value = replace_na(value, 0))
 
-# Separate rows of tweets_words with multiple countries into individual rows
-tweets_words <- tweets_words %>%
-  separate_rows(country, sep = ",")
-
 # Clean up
 rm(afinn, emoji, sentiment_values, tweets_values, clean_tweet, word_sep)
 
@@ -1731,14 +2322,16 @@ rm(afinn, emoji, sentiment_values, tweets_values, clean_tweet, word_sep)
 # Load nrc sentiment dictionary
 nrc <- get_sentiments("nrc")
 
-# Remove word "vaccine" from nrc
+# Remove words "vaccine" and "trump" from nrc
 nrc <- nrc %>%
-  filter(word != "vaccine")
+  filter(word != "vaccine" & word != "trump")
+
+# Join tweets_words with nrc sentiments
+tweets_words <- tweets_words %>%
+  inner_join(nrc, by = "word")
 
 # Create columns with sentiment counts for each tweet
 sentiment_counts <- tweets_words %>%
-  inner_join(nrc, by = "word") %>%
-  group_by(id, sentiment) %>%
   count(id, sentiment) %>%
   spread(sentiment, n) %>%
   mutate_all(function(x) replace_na(x, 0))
@@ -1753,15 +2346,35 @@ tweets[,28:37]  <- tweets[,28:37] %>%
 
 # Separate rows of tweets with multiple countries into individual rows
 tweets <- tweets %>%
-  separate_rows(country, sep = ",")
+  separate_rows(country, sep = ",") %>%
+  
+  # Add continent info for each country
+  left_join(continents, by = "country") %>%
+  
+  # Reorder columns so country, continent, and sub_region are together
+  select(1:4, 38:39, 5:37) %>%
+  
+  # Replace NA's with ""
+  mutate(continent = replace_na(continent, ""),
+         sub_region = replace_na(sub_region, ""))
 
 # Save tweets
 save(tweets, file = "rdas/tweets_cleaned.rda")
 
-# Join tweets_words with nrc sentiments
+# Separate rows of tweets_words with multiple countries into individual rows
 tweets_words <- tweets_words %>%
-  inner_join(nrc, by = "word")
-
+  separate_rows(country, sep = ",") %>%
+  
+  # Add continent info for each country
+  left_join(continents, by = "country") %>%
+  
+  # Reorder columns so country, continent, and sub_region are together
+  select(1:4, 28:29, 5:27) %>%
+  
+  # Replace NA's with ""
+  mutate(continent = replace_na(continent, ""),
+         sub_region = replace_na(sub_region, ""))
+  
 # Save tweets_words
 save(tweets_words, file = "rdas/tweets_words.rda")
 
@@ -1789,9 +2402,11 @@ country_sentiments <- tweets %>%
             avg_trust = mean(trust))
 
 # Join country_sentiments with country_sums
-# Set NA's to 0 for countries with no tweets
 country_sums <- country_sums %>%
-  left_join(country_sentiments, by = "country") %>%
+  left_join(country_sentiments, by = "country")
+
+# Set NA's in columns 25 through 36 to 0 for countries with no tweets
+country_sums[25:36] <- country_sums[25:36] %>%
   mutate_all(function(x) replace_na(x, 0))
 
 # Save country_sums and country_sentiments
@@ -1804,8 +2419,9 @@ save(country_sentiments, file = "rdas/country_sentiments.rda")
 
 # Plot total vaccinations per hundred vs time by country
 p <- progress %>%
-  ggplot(aes(date, total_vaccinations_per_hundred, color = country)) +
-  geom_line() +
+  ggplot(aes(date, total_vaccinations_per_hundred)) +
+  geom_line(aes(color = country,
+                continent = continent)) +
   scale_x_date(date_labels = "%b '%y") +
   ylab("total vaccinations per hundred") +
   ggtitle("Total vaccinations per hundred vs time by country")
@@ -1815,53 +2431,103 @@ ggplotly(p)
 # country over time
 p <- progress %>%
   ggplot(aes(x = people_vaccinated_per_hundred,
-             y = people_fully_vaccinated_per_hundred,
-             color = country,
-             date = date)) +
-  geom_line() +
+             y = people_fully_vaccinated_per_hundred)) +
+  geom_line(aes(color = country,
+                continent = continent,
+                date = date)) +
+  geom_abline(color = "gray") +
   xlab("people vaccinated per hundred") +
   ylab("people fully vaccinated per hundred") +
   ggtitle("Vaccination progress over time by country")
 ggplotly(p)
 
+# Make same plot animated over time
 p <- progress %>%
-  mutate(date = as.numeric(date)) %>%
+  mutate(day = as.numeric(date) - 18609) %>%
   ggplot(aes(x = people_vaccinated_per_hundred,
-             y = people_fully_vaccinated_per_hundred,
-             color = continent)) +
-  geom_point(aes(size = population,
-                 frame = date,
-                 ids = country)) +
-  theme_bw()
+             y = people_fully_vaccinated_per_hundred)) +
+  geom_abline(color = "gray") +
+  geom_point(aes(ids = country,
+                 color = continent,
+                 size = population,
+                 date = date,
+                 frame = day,
+                 vaccines = vaccines)) +
+  theme_bw() +
+  labs(title = "Vaccination progress over time by country since 12/14/2020",
+       x = "people vaccinated per hundred",
+       y = "people fully vaccinated per hundred")
 ggplotly(p)
 
-p <- progress %>%
-  mutate(day = as.numeric(date) - 18608) %>%
+
+# Make same plot using plot_ly() function
+progress %>%
+  mutate(day = as.numeric(date) - 18609) %>%
   plot_ly(
     x = ~people_vaccinated_per_hundred,
     y = ~people_fully_vaccinated_per_hundred,
     size = ~population,
     color = ~continent,
+    opacty = 0.5,
     frame = ~day,
-    text = ~country,
+    text = ~paste0("Country: ", country,
+                  "\nContinent: ", continent,
+                  "\nPopulation: ", population,
+                  "\nDate: ", date,
+                  "\nDay: ", day,
+                  "\nVaccines: ", vaccines,
+                  "\nPeople vaccinated per hundred :",
+                  people_vaccinated_per_hundred,
+                  "\nPeople fully vaccinated per hundred :",
+                  people_fully_vaccinated_per_hundred),
     hoverinfo = "text",
-    type = 'scatter',
-    mode = 'markers'
+    type = "scatter",
+    mode = "markers"
+  ) %>%
+  layout(
+    title = "Vaccination progress over time by country since 12/14/2020",
+    xaxis = list(title = "people vaccinated per hundred"),
+    yaxis = list(title = "people fully vaccinated per hundred")
   )
 
+# Make same plot as gif
 p <- progress %>%
   ggplot(aes(x = people_vaccinated_per_hundred,
              y = people_fully_vaccinated_per_hundred,
-             size = population,
-             color = continent)) +
-  geom_point(aes(ids = country), alpha = 0.7) +
+             size = total_vaccinations_per_hundred)) +
+  geom_abline(color = "gray") +
+  geom_text(x = 45,
+            y = 70,
+            label = "all vaccinated people are fully vaccinated ->",
+            color = "gray",
+            size = 3) +
+  geom_point(aes(color = continent),
+             alpha = 0.5) +
+  geom_text(aes(x = people_vaccinated_per_hundred + 2 +
+                  total_vaccinations_per_hundred / 100,
+                y = people_fully_vaccinated_per_hundred + 2,
+                label = iso_code),
+            color = "black") +
+  scale_size_continuous(range = c(1, 4)) +
+  scale_x_continuous(breaks = seq(0, 100, 25)) +
+  scale_y_continuous(breaks = seq(0, 75, 25)) +
   theme_bw() +
-  transition_states(date) +
   labs(title = "Date: {closest_state}",
        x = "people vaccinated per hundred",
-       y = "people fully vaccinated per hundred")
+       y = "people fully vaccinated per hundred",
+       size = "total vaccinations per hundred") +
+  transition_states(date)
   
-animate(p, nframes = 218)
+# Create gif
+animate(p,
+        nframes = 260,
+        height = 6,
+        width = 9,
+        units = "in",
+        res = 100)
+
+# Save gif
+anim_save("figs/vaccination_progress_over_time_by_country.gif")
 
 # Find which countries have the highest average tweet sentiment
 # Filter for more than 25 tweets
@@ -1896,8 +2562,8 @@ country_sums %>%
                 y = 1.25,
                 label = "number of tweets > 100"),
             color = "slateblue4") +
-  xlab("total vaccinations per hundred people as of 3/31/21") +
-  ylab("average tweet sentiment as of 4/2/21") +
+  xlab("total vaccinations per hundred people as of 4/22/21") +
+  ylab("average tweet sentiment as of 4/22/21") +
   ggtitle("Average tweet sentiment vs total vaccinations by country")
 
 # Save plot
@@ -1908,10 +2574,10 @@ ggsave("figs/sentiment_vs_total_vacs_by_country.png", dpi = 120)
 rm(wd)
 
 # Plot tweet sentiment vs time by country
-# Filter for more than 500 tweets
+# Filter for more than 750 tweets
 tweets %>%
   group_by(country) %>%
-  filter(n() > 500) %>%
+  filter(n() > 750) %>%
   group_by(country, date) %>%
   summarize(avg_sentiment = mean(value)) %>%
   filter(country != "") %>%
@@ -1922,11 +2588,11 @@ tweets %>%
                 label = "neutral"),
             color = "darkgray") +
   geom_smooth(se = FALSE) +
-  geom_label(aes(x = as.Date("2021-02-15"),
-                 y = 1.25,
-                 label = "number of tweets > 500"),
+  geom_label(aes(x = as.Date("2021-02-28"),
+                 y = 0.95,
+                 label = "number of tweets > 750"),
              color = "slateblue4") +
-  theme(legend.position = c(0.55, 0.81),
+  theme(legend.position = c(0.55, 0.83),
         legend.direction = "horizontal") +
   scale_x_date(date_breaks = "months",
                date_labels = "%m/%d/%Y") +
@@ -1935,6 +2601,43 @@ tweets %>%
 
 # Save plot
 ggsave("figs/sentiment_vs_time_by_country.png", dpi = 95)
+
+# Plot tweet sentiment vs time by country
+# Include all countries
+# Make data points for all dates for all countries
+# Use 13 day rolling average for tweet sentiment
+dates <- seq.Date(min(tweets$date), max(tweets$date), 1)
+countries <- country_sums$country
+df <- expand.grid(countries, dates) %>%
+  `colnames<-`(c("country", "date")) %>%
+  arrange(country, date)
+p <- tweets %>%
+  filter(country != "") %>%
+  group_by(country, date) %>%
+  summarize(n_tweets = n(),
+            avg_sentiment_daily = round(mean(value), 2)) %>%
+  right_join(df, by = c("country", "date")) %>%
+  mutate(n_tweets = replace_na(n_tweets, 0),
+         avg_sentiment_daily = replace_na(avg_sentiment_daily, 0)) %>%
+  left_join(continents, by = "country") %>%
+  arrange(country, date) %>%
+  mutate(avg_sentiment_13_day = round(rollmean(avg_sentiment_daily, 13, NA), 2))
+
+p <- p %>%
+  ggplot(aes(date, avg_sentiment_13_day)) +
+  geom_hline(yintercept = 0, color = "darkgray") +
+  geom_text(aes(x = as.Date("2020-12-21"),
+                y = -0.08,
+                label = "neutral"),
+            color = "darkgray") +
+  geom_line(aes(color = country,
+                continent = continent,
+                n_tweets = n_tweets,
+                avg_sentiment_daily = avg_sentiment_daily)) +
+  scale_x_date(date_labels = "%b '%y") +
+  ylab("average tweet sentiment, 13 day rolling average") +
+  ggtitle("Average tweet sentiment vs time by country")
+ggplotly(p)
 
 # Count number of tweets mentioning each vaccine
 tweets %>%
@@ -1999,11 +2702,11 @@ tweets %>%
                 label = "neutral"),
             color = "darkgray") +
   geom_smooth(se = FALSE) +
-  geom_label(aes(x = as.Date("2021-03-17"),
-                 y = -1.1,
+  geom_label(aes(x = as.Date("2021-02-19"),
+                 y = 2.75,
                  label = "number of tweets < 250"),
              color = "slateblue4") +
-  theme(legend.position = c(0.86, 0.72)) +
+  theme(legend.position = c(0.8, 0.75)) +
   scale_x_date(date_breaks = "months",
                date_labels = "%m/%d/%Y") +
   ylab("average tweet sentiment") +
@@ -2012,8 +2715,82 @@ tweets %>%
 # Save plot
 ggsave("figs/sentiment_vs_time_by_vaccine_small_n.png", dpi = 95)
 
+# Plot tweet sentiment vs total vaccinations over time by country
+# Set up data
+dat <- progress %>%
+  filter(country != "") %>%
+  left_join(tweets, by = c("country", "date")) %>%
+  group_by(country, date) %>%
+  summarize(continent = first(continent),
+            population = first(population),
+            vaccines = first(vaccines),
+            total_vaccinations_per_hundred =
+              first(total_vaccinations_per_hundred),
+            value = ifelse(is.na(value),
+                               0,
+                               mean(value)),
+            n_tweets = n()) %>%
+  unique()
+  
 
+# Make plot
+# Use 7 day rolling average for tweet sentiment
+p <- dat %>%
+  group_by(country) %>%
+  mutate(day = as.numeric(date) - 18612,
+         sentiment = round(rollmean(value, 7, NA), 2)) %>%
+  filter(!is.na(sentiment)) %>%
+  select(-value) %>%
+  ggplot(aes(total_vaccinations_per_hundred, sentiment)) +
+  geom_hline(yintercept = 0,
+             color = "gray") +
+  geom_point(aes(ids = country,
+                 color = continent,
+                 size = population,
+                 date = date,
+                 frame = day,
+                 n_tweets = n_tweets,
+                 vaccines = vaccines)) +
+  theme_bw() +
+  labs(title = "Tweet sentiment vs total vaccinations over time by country",
+       x = "total vaccinations per hundred",
+       y = "tweet sentiment, rolling 7 day average")
+ggplotly(p)
 
+# Make same plot using plot_ly() function
+dat %>%
+  group_by(country) %>%
+  mutate(day = as.numeric(date) - 18612,
+         sentiment = round(rollmean(value, 7, NA), 2)) %>%
+  filter(!is.na(sentiment)) %>%
+  select(-value) %>%
+  plot_ly(
+    x = ~total_vaccinations_per_hundred,
+    y = ~sentiment,
+    size = ~population,
+    color = ~continent,
+    opacty = 0.5,
+    frame = ~day,
+    text = ~paste0("Country: ", country,
+                   "\nContinent: ", continent,
+                   "\nPopulation: ", population,
+                   "\nDate: ", date,
+                   "\nDay: ", day,
+                   "\nNumber of tweets: ", n_tweets,
+                   "\nVaccines: ", vaccines,
+                   "\nTotal vaccinations per hundred :",
+                   total_vaccinations_per_hundred,
+                   "\nAverage tweet sentiment:",
+                   sentiment),
+    hoverinfo = "text",
+    type = "scatter",
+    mode = "markers"
+  ) %>%
+  layout(
+    title = "Tweet sentiment vs total vaccinations over time by country",
+    xaxis = list(title = "total vaccinations per hundred"),
+    yaxis = list(title = "tweet sentiment, rolling 7 day average")
+  )
 
 
 
@@ -2070,6 +2847,18 @@ tweets_words %>%
   arrange(desc(n)) %>%
   head(12) %>%
   as.data.frame()
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
